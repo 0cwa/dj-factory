@@ -147,7 +147,7 @@ find_python_interpreter() {
 
         if "$resolved" - <<'PY' >/dev/null 2>&1
 import sys
-sys.exit(0 if sys.version_info >= (3, 10) else 1)
+sys.exit(0 if sys.version_info >= (3, 12) else 1)
 PY
         then
             echo "$resolved"
@@ -267,17 +267,39 @@ ensure_system_prerequisites() {
 ensure_optional_python_toolchains() {
     local packages=()
     local pm
+    local candidate
 
     pm="$(detect_package_manager)"
     case "$pm" in
         apt)
-            packages=(python3.11 python3.11-venv python3.11-dev python3.12 python3.12-venv python3.12-dev)
+            for candidate in python3.12 python3.11; do
+                if command_exists "$candidate"; then
+                    packages+=("${candidate}" "${candidate}-venv" "${candidate}-dev")
+                fi
+            done
+            if [[ ${#packages[@]} -eq 0 ]] && command_exists python3; then
+                packages+=(python3 python3-venv python3-dev)
+            fi
             ;;
         dnf)
-            packages=(python3.11 python3.11-devel python3.12 python3.12-devel)
+            for candidate in python3.12 python3.11; do
+                if command_exists "$candidate"; then
+                    packages+=("${candidate}" "${candidate}-devel")
+                fi
+            done
+            if [[ ${#packages[@]} -eq 0 ]] && command_exists python3; then
+                packages+=(python3)
+            fi
             ;;
         zypper)
-            packages=(python311 python311-pip python312 python312-pip)
+            for candidate in python312 python311; do
+                if command_exists "$candidate"; then
+                    packages+=("${candidate}" "${candidate}-pip")
+                fi
+            done
+            if [[ ${#packages[@]} -eq 0 ]] && command_exists python; then
+                packages+=(python python-pip)
+            fi
             ;;
         *)
             packages=()
@@ -290,23 +312,23 @@ ensure_optional_python_toolchains() {
 }
 
 prepare_python_selection() {
-    BOOTSTRAP_PYTHON="$(find_python_interpreter "${BOOTSTRAP_PYTHON:-}" python3 python)" || \
-        die "Could not find a usable Python interpreter (>= 3.10)."
+    BOOTSTRAP_PYTHON="$(find_python_interpreter "${BOOTSTRAP_PYTHON:-}" python3.12 python3)" || \
+        die "Could not find a usable Python interpreter (>= 3.12)."
 
-    STEMGEN_BUILD_PYTHON="$(find_python_interpreter "${STEMGEN_PYTHON:-}" python3.11 python3.10 python3)" || \
-        die "Could not find Python for Stemgen. Install python3.11 or set STEMGEN_PYTHON=/path/to/python3.11."
+    STEMGEN_BUILD_PYTHON="$(find_python_interpreter "${STEMGEN_PYTHON:-}" python3.12 python3.11 python3)" || \
+        die "Could not find Python for Stemgen. Set STEMGEN_PYTHON to python3.12 (or newer)."
 
     TIDAL_BUILD_PYTHON="$(find_python_interpreter "${TIDAL_PYTHON:-}" python3.12 python3.11 python3)" || \
-        die "Could not find Python for Tidal. Install python3.12 or set TIDAL_PYTHON=/path/to/python."
+        die "Could not find Python for Tidal. Set TIDAL_PYTHON to python3.12 (or newer)."
 
     export BOOTSTRAP_PYTHON STEMGEN_BUILD_PYTHON TIDAL_BUILD_PYTHON
 
     local stemgen_version
     stemgen_version="$(python_version_string "$STEMGEN_BUILD_PYTHON")"
-    if [[ "$stemgen_version" != 3.11.* ]]; then
-        log_warn "⚠️ Stemgen is being built with Python $stemgen_version. Python 3.11 is preferred."
-    else
+    if [[ "$stemgen_version" == 3.12.* ]]; then
         log_info "🐍 Stemgen will use Python $stemgen_version"
+    else
+        log_warn "⚠️ Stemgen is being built with Python $stemgen_version. Python 3.12 is preferred."
     fi
 
     local tidal_version
@@ -425,8 +447,18 @@ patch_tidal_imports() {
     local cli_file
     local gui_file
 
-    tidal_pkg_dir="$VENV_TIDAL/lib/python3.12/site-packages/tidal_dl_ng"
-    [[ -d "$tidal_pkg_dir" ]] || return 0
+    tidal_pkg_dir="$("$VENV_TIDAL/bin/python" - <<'PY'
+import os
+import site
+
+for path in site.getsitepackages() + [site.getusersitepackages()]:
+    candidate = os.path.join(path, "tidal_dl_ng")
+    if os.path.isdir(candidate):
+        print(candidate)
+        break
+PY
+)"
+    [[ -n "$tidal_pkg_dir" ]] || return 0
 
     cli_file="$tidal_pkg_dir/cli.py"
     gui_file="$tidal_pkg_dir/gui.py"
